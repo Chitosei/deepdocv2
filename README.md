@@ -16,7 +16,7 @@ pip install -r requirements.txt
 ```
 
 <h3>3. Run model</h3>
-# File PDF in Test folder is default. Drop your PDF to process your file.
+File PDF in Test folder is default. Drop your PDF to process your file.
 
 ```
 python main.py 
