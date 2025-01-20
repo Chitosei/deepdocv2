@@ -15,9 +15,8 @@ git clone https://github.com/Chitosei/deepdocv2.git
 pip install -r requirements.txt
 ```
 
-<h3>3. Run model</h3>
-File PDF in Test folder is default. Drop your PDF to process your file.
+<h3>3. Run API through bash or terminal</h3>
 
 ```
-python main.py 
+uvicorn main:app --reload
 ```
