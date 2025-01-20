@@ -20,3 +20,5 @@ pip install -r requirements.txt
 ```
 uvicorn main:app --reload
 ```
+
+Run on localhost: http://localhost:8000/docs
