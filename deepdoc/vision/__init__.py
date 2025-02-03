@@ -34,7 +34,7 @@ def init_in_out(args):
         nonlocal outputs, images
         pdf = pdfplumber.open(fnm)
         images = [p.to_image(resolution=72 * zoomin).annotated for i, p in
-                            enumerate(pdf.pages)]
+                  enumerate(pdf.pages)]
 
         for i, page in enumerate(images):
             outputs.append(os.path.split(fnm)[-1] + f"_{i}.jpg")

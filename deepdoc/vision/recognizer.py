@@ -10,9 +10,10 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
-
+import os
 from copy import deepcopy
 
+from deepdoc.utils import get_project_base_directory
 
 import onnxruntime as ort
 from huggingface_hub import snapshot_download

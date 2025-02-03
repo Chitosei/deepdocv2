@@ -13,7 +13,9 @@
 import os
 import time
 
+import fitz
 from huggingface_hub import snapshot_download
+from matplotlib import pyplot as plt
 from pytesseract import pytesseract
 
 from .operators import *  # noqa: F403
@@ -280,7 +282,7 @@ class TextRecognizer(object):
         mean = np.array([0.485, 0.456, 0.406])
         std = np.array([0.229, 0.224, 0.225])
         resized_image = (
-            resized_image - mean[None, None, ...]) / std[None, None, ...]
+                                resized_image - mean[None, None, ...]) / std[None, None, ...]
         resized_image = resized_image.transpose((2, 0, 1))
         resized_image = resized_image.astype('float32')
 
@@ -482,14 +484,15 @@ class OCR(object):
 
         """
         logging.info("Initializing OCR with Vietnamese Model...")
+        self.page_counter = 0
         self.vietnamese_ocr = VietnameseOCR()  # Use your Vietnamese OCR model
         self.drop_score = 0.5
         if not model_dir:
             try:
                 model_dir = os.path.join(
-                        get_project_base_directory(),
-                        "deepdoc")
-                #Debug
+                    get_project_base_directory(),
+                    "deepdoc")
+                # Debug
                 print("Model_dir: " + model_dir)
 
                 self.text_detector = TextDetector(model_dir)
@@ -613,7 +616,7 @@ class OCR(object):
             return None, None, time_dict
 
         return zip(self.sorted_boxes(dt_boxes), [
-                   ("", 0) for _ in range(len(dt_boxes))])
+            ("", 0) for _ in range(len(dt_boxes))])
 
     def recognize(self, ori_im, box):
         img_crop = self.get_rotate_crop_image(ori_im, box)
@@ -667,47 +670,87 @@ class OCR(object):
     #
     #     return list(zip([a.tolist() for a in filter_boxes], filter_rec_res))
 
+    def reset_page_counter(self):
+        """Reset the page counter manually if needed."""
+        self.page_counter = 0
+
     ## for vietnamese model:
-    def __call__(self, img):
+    # def __call__(self, img):
+    #     """
+    #     Process an image with DeepDoc's detector and Vietnamese OCR for recognition.
+    #     """
+    #     time_dict = {'det': 0, 'rec': 0, 'all': 0}
+    #
+    #     if img is None:
+    #         return [], time_dict
+    #
+    #     # Step 1: Detect text regions (bounding boxes)
+    #     start = time.time()
+    #     dt_boxes, elapse = self.text_detector(img)
+    #     time_dict['det'] = elapse
+    #
+    #     if dt_boxes is None:
+    #         time_dict['all'] = time.time() - start
+    #         return [], time_dict
+    #
+    #
+    #
+    #     # Step 2: Recognize text in each detected region
+    #     img_crop_list = [self.get_rotate_crop_image(img, box) for box in dt_boxes]
+    #     recognition_results = self.vietnamese_ocr.extract_and_correct_text(img_crop_list, self.page_counter)
+    #
+    #     time_dict['rec'] = time.time() - start - elapse
+    #     time_dict['all'] = time.time() - start
+    #
+    #     # Step 3: Format results
+    #     results = [
+    #         {
+    #             "text": result["corrected_text"],
+    #             "original_text": result["original_text"],
+    #             "bbox": box.tolist(),
+    #             "page": self.page_counter,
+    #             "type": "ocr",
+    #         }
+    #         for box, result in zip(dt_boxes, recognition_results)
+    #     ]
+    #
+    #     # return results, time_dict
+    #     return results
+
+    def __call__(self, page_image, text_bounding_boxes):
         """
-        Process an image with DeepDoc's detector and Vietnamese OCR for recognition.
+        Process an image with provided text bounding boxes and Vietnamese OCR for recognition.
+
+        :param page_image: Input page image.
+        :param text_bounding_boxes: List of bounding boxes (from layout) in [x0, y0, x1, y1] format.
+        :return: OCR results containing extracted and corrected text.
         """
         time_dict = {'det': 0, 'rec': 0, 'all': 0}
 
-        if img is None:
+        if page_image is None or not text_bounding_boxes:
             return [], time_dict
 
-        # Step 1: Detect text regions (bounding boxes)
         start = time.time()
-        dt_boxes, elapse = self.text_detector(img)
-        time_dict['det'] = elapse
+        results = []
 
-        if dt_boxes is None:
-            time_dict['all'] = time.time() - start
-            return [], time_dict
+        for box in text_bounding_boxes:
+            x0, y0, x1, y1 = box["x0"], box["top"], box["x1"], box["bottom"]
+            cropped_image = page_image.crop((x0, y0, x1, y1))
+            recognition_result = VietnameseOCR().extract_and_correct_text([cropped_image], 1)
 
-        # Step 2: Recognize text in each detected region
-        img_crop_list = [self.get_rotate_crop_image(img, box) for box in dt_boxes]
-        recognition_results = []
-        for crop_img in img_crop_list:
-            text = self.vietnamese_ocr.extract_text_from_image(crop_img)
-            recognition_results.append(text)
+            results.append({
+                "text": recognition_result[0]["corrected_text"],
+                "original_text": recognition_result[0]["original_text"],
+                "bbox": [x0, y0, x1, y1],
+                "page": 1,
+                "type": "ocr",
+            })
 
-        time_dict['rec'] = time.time() - start - elapse
+        time_dict['rec'] = time.time() - start
         time_dict['all'] = time.time() - start
 
-        # Step 3: Format results
-        results = [
-            {
-                "text": text,
-                "bbox": box.tolist(),
-                "score": 0.95,  # Placeholder score
-                "type": "ocr",
-            }
-            for box, text in zip(dt_boxes, recognition_results)
-        ]
+        return results
 
-        return results, time_dict
 
 class VietnameseOCR:
     def __init__(self):
@@ -734,23 +777,29 @@ class VietnameseOCR:
             logging.error(f"Text correction failed: {e}")
             return extracted_text
 
-    def extract_and_correct_text(self, images):
-        """Extract and correct text from multiple images"""
+    def extract_and_correct_text(self, images, page_number):
+        """Extract and correct text from multiple images."""
         results = []
-        for i, image in enumerate(images, start=1):
+
+        # Ensure images is a list, handle both single and multiple images
+        if not isinstance(images, list):
+            images = [images]
+
+        for image in images:
             try:
                 extracted_text = self.extract_text_from_image(image)
                 corrected_text = self.correct_text(extracted_text)
                 results.append({
-                    "page": i,
+                    "page": page_number,  # Use the correct page number
                     "original_text": extracted_text,
                     "corrected_text": corrected_text
                 })
             except Exception as e:
-                logging.error(f"Error processing page {i}: {e}")
+                logging.error(f"Error processing page {page_number}: {e}")
                 results.append({
-                    "page": i,
+                    "page": page_number,  # Use the correct page number for errors too
                     "original_text": "",
                     "corrected_text": ""
                 })
+
         return results

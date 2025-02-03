@@ -10,6 +10,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 #
+import os
 import re
 from collections import Counter
 from copy import deepcopy
@@ -18,6 +19,7 @@ import cv2
 import numpy as np
 from huggingface_hub import snapshot_download
 
+from deepdoc.utils import get_project_base_directory
 from deepdoc.vision import Recognizer
 from deepdoc.vision.operators import nms
 
@@ -76,7 +78,7 @@ class LayoutRecognizer(Recognizer):
                     "x0": b["bbox"][0] / scale_factor, "x1": b["bbox"][2] / scale_factor,
                     "top": b["bbox"][1] / scale_factor, "bottom": b["bbox"][-1] / scale_factor,
                     "page_number": pn,
-                    } for b in lts if float(b["score"]) >= 0.8 or b["type"] not in self.garbage_layouts]
+                    } for b in lts if float(b["score"]) >= 0.4 or b["type"] not in self.garbage_layouts]
             lts = self.sort_Y_firstly(lts, np.mean(
                 [lt["bottom"] - lt["top"] for lt in lts]) / 2)
             lts = self.layouts_cleanup(bxs, lts)
