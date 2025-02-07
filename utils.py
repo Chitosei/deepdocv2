@@ -1,6 +1,6 @@
 import logging
 import os
-
+import shutil
 import cv2
 from PyPDF2 import PdfReader
 import fitz
@@ -12,9 +12,14 @@ from pdf2image import convert_from_path
 from deepdoc.vision import OCR
 import torch
 from transformers import BlipProcessor, BlipForConditionalGeneration
+from transformers import AutoProcessor, AutoModel
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# # Load Vintern-1B with trust_remote_code=True
+# vintern_processor = AutoProcessor.from_pretrained("5CD-AI/Vintern-1B-v2", trust_remote_code=True)
+# vintern_model = AutoModel.from_pretrained("5CD-AI/Vintern-1B-v2", trust_remote_code=True).to(device)
 # Initialize BLIP model for captioning
-device = "cuda" if torch.cuda.is_available() else "cpu"
 processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
 model = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-base").to(device)
 ocr = OCR()
@@ -82,6 +87,7 @@ def process_pdf(pdf_path, ocr, output_dir="output"):
         :param output_dir: Directory to save the results (images and text).
         """
     os.makedirs(output_dir, exist_ok=True)
+    clear_directory(output_dir)
     pdf = fitz.open(pdf_path)
     pages = convert_from_path(pdf_path, dpi=150)
     all_results = []
@@ -233,6 +239,8 @@ def extract_text_from_layout(layout_results, pdf_path, output_dir="output_text")
     :return: List of extracted texts with page numbers.
     """
     os.makedirs(output_dir, exist_ok=True)
+    clear_directory(output_dir)
+
     pdf_images = convert_from_path(pdf_path, dpi=300)
 
     for page in layout_results:
@@ -358,6 +366,7 @@ def extract_and_caption_figures(pdf_path, layout_results, output_dir="output_ima
     """
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
+    clear_directory(output_dir)
 
     doc = fitz.open(pdf_path)
     captions = []
@@ -452,6 +461,58 @@ def crop_text_regions(pdf_path, layout_results, output_dir="output_text_regions"
     return cropped_images
 
 
+def crop_regions_for_vintern(pdf_path, layout_results, output_dir="output_regions"):
+    """
+    Crop regions (text, tables, figures, equations) from a PDF for processing with Vintern-1B.
+
+    :param pdf_path: Path to the PDF file.
+    :param layout_results: JSON list containing layout results with bounding boxes and labels.
+    :param output_dir: Directory to save cropped regions.
+    :return: List of cropped image paths with their associated region labels.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    doc = fitz.open(pdf_path)
+    cropped_regions = []
+    for page in layout_results:
+        page_number = page.get("page_number") - 1  # Adjust for zero-based indexing
+        if page_number < 0 or page_number >= len(doc):
+            print(f"Skipping invalid page number: {page_number + 1}")
+            continue
+
+        pdf_page = doc[page_number]
+
+        for item in page.get("content", []):
+            label = item.get("label").lower()
+            x0, y0, x1, y1 = item["x0"], item["top"], item["x1"], item["bottom"]
+            rect = fitz.Rect(x0, y0, x1, y1)
+
+            try:
+                # Extract region from PDF
+                pix = pdf_page.get_pixmap(clip=rect)
+                img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+
+                # Save image
+                image_filename = f"page_{page_number + 1}_{label}_{page['content'].index(item) + 1}.png"
+                image_path = os.path.join(output_dir, image_filename)
+                img.save(image_path)
+
+                # Store metadata for processing
+                cropped_regions.append({
+                    "page_number": page_number + 1,
+                    "image_path": image_path,
+                    "label": label,  # text, figure, table, equation
+                    "bbox": [x0, y0, x1, y1]
+                })
+
+                print(f"Saved cropped {label}: {image_filename}")
+
+            except Exception as e:
+                print(f"Error processing {label} on page {page_number + 1}: {e}")
+
+    doc.close()
+    return cropped_regions
+
+
 def process_cropped_images(cropped_images, ocr_processor):
     extracted_texts = []
     for cropped in cropped_images:
@@ -463,3 +524,34 @@ def process_cropped_images(cropped_images, ocr_processor):
             "text": extracted_text
         })
     return extracted_texts
+
+
+# def vintern_process(image, prompt):
+#     """
+#     Send image to Vintern-1B for OCR and text extraction.
+#
+#     :param image: PIL Image to process.
+#     :param prompt: Instruction for Vintern-1B.
+#     :return: Extracted text.
+#     """
+#     try:
+#         inputs = vintern_processor(images=image, text=prompt, return_tensors="pt").to(device)
+#         outputs = vintern_model.generate(**inputs)
+#         extracted_text = vintern_processor.decode(outputs[0], skip_special_tokens=True)
+#         return extracted_text
+#     except Exception as e:
+#         return f"Error extracting text with Vintern-1B: {e}"
+
+
+def clear_directory(directory):
+    """Remove all files from a directory while keeping the folder structure intact."""
+    if os.path.exists(directory):
+        for file in os.listdir(directory):
+            file_path = os.path.join(directory, file)
+            try:
+                if os.path.isfile(file_path) or os.path.islink(file_path):
+                    os.unlink(file_path)  # Remove files
+                elif os.path.isdir(file_path):
+                    shutil.rmtree(file_path)  # Remove subdirectories
+            except Exception as e:
+                print(f"Failed to delete {file_path}. Reason: {e}")
