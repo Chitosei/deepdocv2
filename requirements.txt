@@ -88,4 +88,10 @@ einops
 timm
 frontend
 tools
-gc
+datrie
+sentencepiece
+python-multipart
+pymupdf
+easyocr
+pdf2image
+poppler-utils

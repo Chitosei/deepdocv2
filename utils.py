@@ -89,7 +89,7 @@ def process_pdf(pdf_path, ocr, output_dir="output"):
     os.makedirs(output_dir, exist_ok=True)
     clear_directory(output_dir)
     pdf = fitz.open(pdf_path)
-    pages = convert_from_path(pdf_path, dpi=150)
+    pages = convert_from_path(pdf_path, dpi=300)
     all_results = []
 
     for page_num, page in enumerate(pages, start=1):
@@ -423,6 +423,7 @@ def crop_text_regions(pdf_path, layout_results, output_dir="output_text_regions"
     :return: List of cropped image file paths.
     """
     os.makedirs(output_dir, exist_ok=True)
+    clear_directory(output_dir)
     doc = fitz.open(pdf_path)
     cropped_images = []
 
@@ -471,6 +472,7 @@ def crop_regions_for_vintern(pdf_path, layout_results, output_dir="output_region
     :return: List of cropped image paths with their associated region labels.
     """
     os.makedirs(output_dir, exist_ok=True)
+    clear_directory(output_dir)
     doc = fitz.open(pdf_path)
     cropped_regions = []
     for page in layout_results:

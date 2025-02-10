@@ -1,11 +1,15 @@
 # This is a sample Python script.
 import uuid
 import cv2
+import json
 import torch
 import time
-
+import os
+from PIL import Image, ImageDraw, ImageFont
 from deepdoc.vision.t_recognizer import process_layout
-from utils import *
+from utils import clear_directory, is_pdf_selectable, extract_and_caption_figures, \
+    extract_text_with_page_numbers, crop_text_regions
+
 from fastapi import FastAPI, File, UploadFile
 from fastapi.responses import JSONResponse
 from deepdoc.vision.ocr import OCR
@@ -18,22 +22,23 @@ UPLOAD_FOLDER = "uploads"
 OUTPUT_FOLDER = "output_texts"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
-clear_directory(UPLOAD_FOLDER)
-clear_directory(OUTPUT_FOLDER)
+
 
 # Initialize BLIP model for captioning
 device = "cuda" if torch.cuda.is_available() else "cpu"
-print(device)
+print(device)  # Debug
 processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
 model = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-base").to(device)
 
-
 ocr = OCR()
-os.makedirs("output_texts",exist_ok=True)
+os.makedirs("output_texts", exist_ok=True)
+
 
 @app.post("/upload/")
 async def upload_pdf(file: UploadFile = File(...)):
     start_time = time.time()  # Start timing
+    clear_directory(UPLOAD_FOLDER)
+    clear_directory(OUTPUT_FOLDER)
 
     allowed_extensions = {'.jpg', '.jpeg', '.png', '.pdf'}
     ext = os.path.splitext(file.filename)[1].lower()
@@ -56,28 +61,25 @@ async def upload_pdf(file: UploadFile = File(...)):
             selectable_text = extract_text_with_page_numbers(file_path)
             captions = extract_and_caption_figures(file_path, layout_results)
 
+            extracted_data = []
+
             for text_info in selectable_text:
                 corrected_text = text_info['text'].strip() if text_info['text'].strip() else "[No text detected]"
                 extracted_texts.append({
                     "page": text_info['page_number'],
                     "text": corrected_text
                 })
-                output_text_path = os.path.join(OUTPUT_FOLDER, f"page_{text_info['page_number']}_text.txt")
-                with open(output_text_path, 'w', encoding="utf-8") as f:
-                    f.write(f"Page: {text_info['page_number']}\n")
-                    f.write(f"Text: {corrected_text}\n\n")
+                extracted_data.append({
+                    "page": text_info['page_number'],
+                    "text": corrected_text
+                })
 
-            response_content = {
-                "message": "Selectable text extracted successfully",
-                "text": selectable_text,
-                "layout": layout_results,
-                "captions": captions
-            }
+            output_json_path = os.path.join(OUTPUT_FOLDER, "extracted_text.json")
+            with open(output_json_path, 'w', encoding="utf-8") as f:
+                json.dump(extracted_data, f, ensure_ascii=False, indent=4)
 
         else:
             print("Processing scanned PDF...")
-            # # For vintern
-            # cropped_regions = crop_regions_for_vintern(file_path, layout_results)
 
             # Process when it is scanned pdf
             cropped_images = crop_text_regions(file_path, layout_results)
@@ -116,4 +118,3 @@ async def upload_pdf(file: UploadFile = File(...)):
         return JSONResponse(content=response_content, status_code=200)
     except Exception as e:
         return JSONResponse(status_code=500, content={"Message": f"Error processing PDF: {str(e)}"})
-

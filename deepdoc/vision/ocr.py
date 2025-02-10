@@ -12,13 +12,11 @@
 #
 import os
 import time
-from pytesseract import image_to_string
-import fitz
+
+import easyocr
+
 from huggingface_hub import snapshot_download
-from matplotlib import pyplot as plt
-from pytesseract import pytesseract
-import torch
-import gc
+
 from .operators import *  # noqa: F403
 import math
 import numpy as np
@@ -28,7 +26,6 @@ from transformers import pipeline
 from .postprocess import build_post_process
 from ..utils import get_project_base_directory
 
-pytesseract.tesseract_cmd = r"C:\Users\User\AppData\Local\Programs\Tesseract-OCR\tesseract.exe"
 
 def transform(data, ops=None):
     """ transform """
@@ -488,7 +485,6 @@ class OCR(object):
         logging.info("Initializing OCR with Vietnamese Model...")
         self.page_counter = 0
         self.vietnamese_ocr = VietnameseOCR()  # Use your Vietnamese OCR model
-        self.drop_score = 0.5
         if not model_dir:
             try:
                 model_dir = os.path.join(
@@ -758,36 +754,26 @@ class VietnameseOCR:
     def __init__(self):
         logging.info("Initializing VietnameseOCR...")
 
-        # Check if GPU is available, otherwise fallback to CPU
-        device = 0 if torch.cuda.is_available() else -1
+        # Initialize EasyOCR (Enable GPU if available)
+        self.ocr = easyocr.Reader(["vi"], gpu=True)
 
-        # Load the Hugging Face model with the appropriate device
+        # Load Hugging Face model for text correction (still using CPU)
         self.corrector = pipeline("text2text-generation",
                                   model="bmd1905/vietnamese-correction-v2",
-                                  device=device)  # Apply GPU if available
+                                  device=0)  # Force CPU
 
     def preprocess_image(self, image):
-        """Preprocess image for better OCR results"""
-        gray = cv2.cvtColor(np.array(image), cv2.COLOR_BGR2GRAY)
-        binary = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
-        return binary
+        """Preprocess image for better OCR results (convert to RGB)."""
+        return cv2.cvtColor(np.array(image), cv2.COLOR_BGR2RGB)
 
     def extract_text_from_images(self, images):
-        """Batch extract text from images using Tesseract OCR, with explicit memory cleanup."""
+        """Batch extract text from images using EasyOCR."""
         preprocessed_images = [self.preprocess_image(img) for img in images]
 
         extracted_texts = []
         for img in preprocessed_images:
-            try:
-                text = pytesseract.image_to_string(img, lang="vie").strip()
-                extracted_texts.append(text)
-            except Exception as e:
-                logging.error(f"Error processing image with Tesseract: {e}")
-                extracted_texts.append("")
-
-            # **Force Tesseract to Release Memory After Each Image**
-            pytesseract.tesseract_cmd = r"C:\Users\User\AppData\Local\Programs\Tesseract-OCR\tesseract.exe"
-            gc.collect()  # **Explicitly run garbage collection**
+            result = self.ocr.readtext(img, detail=0)  # Extract only text
+            extracted_texts.append("\n".join(result))
 
         return extracted_texts
 
@@ -797,69 +783,39 @@ class VietnameseOCR:
             return []
 
         try:
-            corrected_texts = self.corrector(extracted_texts, max_length=1024, truncation=True)
-            return [ct["generated_text"] for ct in corrected_texts]
+            # Pass all texts as a batch to the model
+            corrected_results = self.corrector(extracted_texts, max_length=512, truncation=True)
+
+            # Extract only corrected text from results
+            corrected_texts = [result["generated_text"] for result in corrected_results]
+
+            return corrected_texts
         except Exception as e:
             logging.error(f"Text correction failed: {e}")
             return extracted_texts  # Return original extracted text if correction fails
 
-    # def extract_and_correct_text(self, images, page_number):
-    #     """Extract and correct text from multiple images."""
-    #     results = []
-    #
-    #     # Ensure images is a list, handle both single and multiple images
-    #     if not isinstance(images, list):
-    #         images = [images]
-    #
-    #     for image in images:
-    #         try:
-    #             extracted_text = self.extract_text_from_image(image)
-    #             corrected_text = self.correct_text(extracted_text)
-    #             results.append({
-    #                 "page": page_number,  # Use the correct page number
-    #                 "original_text": extracted_text,
-    #                 "corrected_text": corrected_text
-    #             })
-    #         except Exception as e:
-    #             logging.error(f"Error processing page {page_number}: {e}")
-    #             results.append({
-    #                 "page": page_number,  # Use the correct page number for errors too
-    #                 "original_text": "",
-    #                 "corrected_text": ""
-    #             })
-    #
-    #     return results
-
     def extract_and_correct_text(self, images, page_numbers):
-        """Batch extract and correct text from multiple images."""
+        """Extract text from multiple images."""
         results = []
 
-        # Ensure images and page_numbers are lists
         if not isinstance(images, list):
             images = [images]
             page_numbers = [page_numbers]
 
-        if len(images) != len(page_numbers):
-            logging.error("Mismatch: Number of images and page numbers do not match!")
-            return []
-
         try:
-            # **Batch Extract Text**
             extracted_texts = self.extract_text_from_images(images)
-
-            # **Batch Correct Text Using Hugging Face Pipeline**
             corrected_texts = self.correct_texts(extracted_texts)
 
             # Format results correctly with page numbers
-            for page_number, extracted_text, corrected_text in zip(page_numbers, extracted_texts, corrected_texts):
+            for page_number, extracted_text in zip(page_numbers, extracted_texts):
                 results.append({
                     "page": page_number,
                     "original_text": extracted_text,
-                    "corrected_text": corrected_text
+                    "corrected_text": corrected_texts  # No correction applied yet
                 })
 
         except Exception as e:
-            logging.error(f"Error processing batch OCR: {e}")
+            logging.error(f"Error processing OCR: {e}")
             for page_number in page_numbers:
                 results.append({
                     "page": page_number,
